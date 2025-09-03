@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import VuePdfEmbed from '../src/index'
+import VuePdfEmbed, {
+  preloadTextLayerCache,
+  preloadTextLayerCacheAll,
+} from '../src/index'
 import type { CacheStats } from '../src/services/textLayerCache'
+import type { PreloadResult } from '../src/utils/preloadCache'
 
 const pdfRef = ref()
 const currentPage = ref(1)
@@ -9,6 +13,8 @@ const cacheStats = ref<CacheStats | null>(null)
 const isLoading = ref(false)
 const preloadPages = ref([1, 2, 3])
 const renderTime = ref<number | null>(null)
+const standalonePreloadProgress = ref(0)
+const lastPreloadResult = ref<PreloadResult | null>(null)
 
 // Use a sample PDF URL for multi-page demonstration
 const pdfSource =
@@ -82,6 +88,68 @@ const goToPage = (page: number) => {
   renderTime.value = null
 }
 
+const standalonePreloadSelected = async () => {
+  isLoading.value = true
+  standalonePreloadProgress.value = 0
+
+  try {
+    const startTime = Date.now()
+    const result = await preloadTextLayerCache(pdfSource, preloadPages.value, {
+      onProgress: (loaded, total) => {
+        standalonePreloadProgress.value = Math.round((loaded / total) * 100)
+      },
+    })
+
+    const duration = Date.now() - startTime
+    lastPreloadResult.value = result
+
+    console.log(`Standalone preload completed in ${duration}ms:`, result)
+    updateCacheStats()
+  } catch (error) {
+    console.error('Standalone preload failed:', error)
+    lastPreloadResult.value = {
+      success: false,
+      cached: 0,
+      failed: 0,
+      totalPages: 0,
+    }
+  } finally {
+    isLoading.value = false
+    standalonePreloadProgress.value = 0
+  }
+}
+
+const standalonePreloadAll = async () => {
+  isLoading.value = true
+  standalonePreloadProgress.value = 0
+
+  try {
+    const startTime = Date.now()
+    const result = await preloadTextLayerCacheAll(pdfSource, {
+      onProgress: (loaded, total) => {
+        standalonePreloadProgress.value = Math.round((loaded / total) * 100)
+      },
+    })
+
+    const duration = Date.now() - startTime
+    lastPreloadResult.value = result
+
+    console.log(`Standalone preload all completed in ${duration}ms:`, result)
+    updateCacheStats()
+  } catch (error) {
+    console.error('Standalone preload all failed:', error)
+    lastPreloadResult.value = {
+      success: false,
+      cached: 0,
+      failed: 0,
+      totalPages: 0,
+    }
+  } finally {
+    isLoading.value = false
+    standalonePreloadProgress.value = 0
+  }
+}
+
 onMounted(() => {
   // Update stats every 2 seconds for demo purposes
   setInterval(updateCacheStats, 2000)
@@ -124,9 +192,55 @@ onMounted(() => {
       <div v-else class="loading">Loading cache statistics...</div>
     </div>
 
-    <!-- Controls Panel -->
+    <!-- Standalone Preloading Panel -->
     <div class="controls-panel">
-      <h3>⚙️ Cache Controls</h3>
+      <h3>🚀 Standalone Preloading (Library Functions)</h3>
+
+      <div class="control-group">
+        <label
+          >These functions work <strong>before</strong> component mounts!</label
+        >
+        <div class="standalone-controls">
+          <button :disabled="isLoading" @click="standalonePreloadSelected">
+            {{ isLoading ? 'Preloading...' : 'preloadTextLayerCache()' }}
+          </button>
+          <button :disabled="isLoading" @click="standalonePreloadAll">
+            {{ isLoading ? 'Preloading...' : 'preloadTextLayerCacheAll()' }}
+          </button>
+        </div>
+
+        <div v-if="standalonePreloadProgress > 0" class="progress-bar">
+          <div
+            class="progress-fill"
+            :style="{ width: `${standalonePreloadProgress}%` }"
+          ></div>
+          <span class="progress-text">{{ standalonePreloadProgress }}%</span>
+        </div>
+
+        <div v-if="lastPreloadResult" class="preload-result">
+          <div
+            class="result-summary"
+            :class="{
+              success: lastPreloadResult.success,
+              warning: !lastPreloadResult.success,
+            }"
+          >
+            {{ lastPreloadResult.success ? '✅' : '⚠️' }}
+            Cached {{ lastPreloadResult.cached }}/{{
+              lastPreloadResult.totalPages
+            }}
+            pages
+            <span v-if="lastPreloadResult.failed > 0"
+              >({{ lastPreloadResult.failed }} failed)</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Component Controls Panel -->
+    <div class="controls-panel">
+      <h3>⚙️ Component Cache Controls</h3>
 
       <div class="control-group">
         <label>Preload Pages (comma-separated):</label>
@@ -135,10 +249,10 @@ onMounted(() => {
           type="text"
           placeholder="1,2,3,4,5"
           @input="
-            preloadPages = $event.target.value
+            preloadPages = ($event.target as HTMLInputElement).value
               .split(',')
-              .map((n) => parseInt(n.trim()))
-              .filter((n) => !isNaN(n))
+              .map((n: string) => parseInt(n.trim()))
+              .filter((n: number) => !isNaN(n))
           "
         />
         <button :disabled="isLoading" @click="preloadSelectedPages">
@@ -478,6 +592,86 @@ body {
 
   .pdf-viewer .vue-pdf-embed {
     max-width: 100%;
+  }
+}
+
+/* Standalone preloading styles */
+.standalone-controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+
+  button {
+    padding: 0.75rem 1rem;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.875em;
+
+    &:hover:not(:disabled) {
+      background: #218838;
+    }
+
+    &:disabled {
+      background: #6c757d;
+    }
+  }
+}
+
+.progress-bar {
+  position: relative;
+  width: 100%;
+  height: 24px;
+  background: #e9ecef;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 1rem 0;
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #28a745, #20c997);
+    border-radius: 12px;
+    transition: width 0.3s ease;
+  }
+
+  .progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: 600;
+    font-size: 0.875em;
+    color: #333;
+    text-shadow: 0 0 3px white;
+  }
+}
+
+.preload-result {
+  .result-summary {
+    padding: 0.75rem;
+    border-radius: 6px;
+    font-weight: 600;
+
+    &.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    &.warning {
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffeaa7;
+    }
+
+    span {
+      font-weight: normal;
+      opacity: 0.8;
+    }
   }
 }
 </style>
