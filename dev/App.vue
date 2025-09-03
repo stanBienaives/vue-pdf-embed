@@ -18,6 +18,7 @@ const lastPreloadResult = ref<PreloadResult | null>(null)
 const isDragOver = ref(false)
 const isFileLoading = ref(false)
 const uploadedFileName = ref('')
+const showTextLayer = ref(false)
 
 // Default PDF URL for multi-page demonstration
 const defaultPdfUrl =
@@ -42,6 +43,11 @@ const onDocumentLoaded = async () => {
 const onRendered = () => {
   updateCacheStats()
   renderTime.value = Date.now()
+
+  // Apply TextLayer visualization if enabled
+  if (showTextLayer.value) {
+    applyTextLayerVisualization()
+  }
 }
 
 const preloadSelectedPages = async () => {
@@ -90,6 +96,36 @@ const clearCache = () => {
 const goToPage = (page: number) => {
   currentPage.value = page
   renderTime.value = null
+}
+
+const applyTextLayerVisualization = () => {
+  // Apply visualization class to all textLayer elements
+  const textLayers = document.querySelectorAll('.textLayer')
+  textLayers.forEach((layer) => {
+    layer.classList.add('show-text-layer')
+  })
+}
+
+const removeTextLayerVisualization = () => {
+  // Remove visualization class from all textLayer elements
+  const textLayers = document.querySelectorAll('.textLayer')
+  textLayers.forEach((layer) => {
+    layer.classList.remove('show-text-layer')
+  })
+}
+
+const toggleTextLayerVisualization = () => {
+  showTextLayer.value = !showTextLayer.value
+
+  if (showTextLayer.value) {
+    applyTextLayerVisualization()
+  } else {
+    removeTextLayerVisualization()
+  }
+
+  console.log(
+    `TextLayer visualization ${showTextLayer.value ? 'enabled' : 'disabled'}`
+  )
 }
 
 const handleFileUpload = async (file: File) => {
@@ -419,6 +455,24 @@ onMounted(() => {
 
     <!-- PDF Viewer -->
     <div class="pdf-viewer">
+      <div class="viewer-controls">
+        <button
+          class="text-layer-toggle"
+          :class="{ active: showTextLayer }"
+          title="Toggle TextLayer visualization to see the invisible text elements used for selection"
+          @click="toggleTextLayerVisualization"
+        >
+          {{ showTextLayer ? '👁️ Hide TextLayer' : '👁️‍🗨️ Show TextLayer' }}
+        </button>
+        <span class="viewer-info">
+          {{
+            showTextLayer
+              ? 'TextLayer elements are now visible with yellow background'
+              : 'Click to visualize invisible text selection layer'
+          }}
+        </span>
+      </div>
+
       <VuePdfEmbed
         ref="pdfRef"
         :source="pdfSource"
@@ -646,6 +700,50 @@ body {
   margin-bottom: 1.5rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 
+  .viewer-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid #6f42c1;
+
+    .text-layer-toggle {
+      padding: 0.5rem 1rem;
+      background: #6f42c1;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.875em;
+
+      &:hover {
+        background: #5a2d91;
+        transform: translateY(-1px);
+      }
+
+      &.active {
+        background: #fd7e14;
+        box-shadow: 0 0 0 2px rgba(253, 126, 20, 0.3);
+
+        &:hover {
+          background: #e8690b;
+        }
+      }
+    }
+
+    .viewer-info {
+      font-size: 0.875em;
+      color: #6c757d;
+      font-style: italic;
+      flex: 1;
+    }
+  }
+
   .vue-pdf-embed {
     margin: auto;
     max-width: 600px;
@@ -724,8 +822,20 @@ body {
     }
   }
 
-  .pdf-viewer .vue-pdf-embed {
-    max-width: 100%;
+  .pdf-viewer {
+    .viewer-controls {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+
+      .viewer-info {
+        font-size: 0.8em;
+      }
+    }
+
+    .vue-pdf-embed {
+      max-width: 100%;
+    }
   }
 }
 
@@ -961,5 +1071,18 @@ body {
       }
     }
   }
+}
+
+/* TextLayer Visualization */
+.textLayer.show-text-layer {
+  background-color: rgba(255, 255, 0, 0.2) !important;
+  border: 1px solid rgba(255, 255, 0, 0.5) !important;
+}
+
+.textLayer.show-text-layer :is(span, br) {
+  color: rgba(255, 0, 0, 0.7) !important;
+  background-color: rgba(255, 255, 0, 0.3) !important;
+  border: 1px solid rgba(255, 0, 0, 0.4) !important;
+  border-radius: 2px !important;
 }
 </style>
