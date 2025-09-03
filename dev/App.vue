@@ -15,10 +15,14 @@ const preloadPages = ref([1, 2, 3])
 const renderTime = ref<number | null>(null)
 const standalonePreloadProgress = ref(0)
 const lastPreloadResult = ref<PreloadResult | null>(null)
+const isDragOver = ref(false)
+const isFileLoading = ref(false)
+const uploadedFileName = ref('')
 
-// Use a sample PDF URL for multi-page demonstration
-const pdfSource =
+// Default PDF URL for multi-page demonstration
+const defaultPdfUrl =
   'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf'
+const pdfSource = ref<string | ArrayBuffer>(defaultPdfUrl)
 
 const pages = computed(() => {
   return pdfRef.value?.doc?.numPages || 0
@@ -88,17 +92,93 @@ const goToPage = (page: number) => {
   renderTime.value = null
 }
 
+const handleFileUpload = async (file: File) => {
+  if (!file || file.type !== 'application/pdf') {
+    alert('Please select a valid PDF file')
+    return
+  }
+
+  isFileLoading.value = true
+  try {
+    const arrayBuffer = await file.arrayBuffer()
+    pdfSource.value = arrayBuffer
+    uploadedFileName.value = file.name
+    currentPage.value = 1
+
+    // Clear cache when switching documents
+    if (pdfRef.value) {
+      pdfRef.value.clearTextLayerCache()
+      updateCacheStats()
+    }
+
+    console.log(
+      `Loaded PDF: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
+    )
+  } catch (error) {
+    console.error('Failed to load PDF file:', error)
+    alert('Failed to load PDF file. Please try another file.')
+  } finally {
+    isFileLoading.value = false
+  }
+}
+
+const handleFileInputChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (file) {
+    handleFileUpload(file)
+  }
+}
+
+const handleDragOver = (event: DragEvent) => {
+  event.preventDefault()
+  isDragOver.value = true
+}
+
+const handleDragLeave = (event: DragEvent) => {
+  event.preventDefault()
+  isDragOver.value = false
+}
+
+const handleDrop = (event: DragEvent) => {
+  event.preventDefault()
+  isDragOver.value = false
+
+  const file = event.dataTransfer?.files?.[0]
+  if (file) {
+    handleFileUpload(file)
+  }
+}
+
+const resetToDefault = () => {
+  pdfSource.value = defaultPdfUrl
+  uploadedFileName.value = ''
+  currentPage.value = 1
+
+  // Clear cache when switching back to default
+  if (pdfRef.value) {
+    pdfRef.value.clearTextLayerCache()
+    updateCacheStats()
+  }
+
+  console.log('Reset to default PDF document')
+}
+
 const standalonePreloadSelected = async () => {
   isLoading.value = true
   standalonePreloadProgress.value = 0
 
   try {
     const startTime = Date.now()
-    const result = await preloadTextLayerCache(pdfSource, preloadPages.value, {
-      onProgress: (loaded, total) => {
-        standalonePreloadProgress.value = Math.round((loaded / total) * 100)
-      },
-    })
+    const result = await preloadTextLayerCache(
+      pdfSource.value,
+      preloadPages.value,
+      {
+        onProgress: (loaded, total) => {
+          standalonePreloadProgress.value = Math.round((loaded / total) * 100)
+        },
+      }
+    )
 
     const duration = Date.now() - startTime
     lastPreloadResult.value = result
@@ -125,7 +205,7 @@ const standalonePreloadAll = async () => {
 
   try {
     const startTime = Date.now()
-    const result = await preloadTextLayerCacheAll(pdfSource, {
+    const result = await preloadTextLayerCacheAll(pdfSource.value, {
       onProgress: (loaded, total) => {
         standalonePreloadProgress.value = Math.round((loaded / total) * 100)
       },
@@ -159,6 +239,60 @@ onMounted(() => {
 <template>
   <div class="demo-container">
     <h1>Vue PDF Embed - TextLayer Caching Demo</h1>
+
+    <!-- File Upload Panel -->
+    <div class="controls-panel">
+      <h3>📄 PDF Document</h3>
+
+      <div class="control-group">
+        <div class="current-document">
+          <label>Current Document:</label>
+          <span class="document-info">
+            {{ uploadedFileName || 'Default Sample PDF' }}
+            <span v-if="!uploadedFileName" class="document-url"
+              >(Mozilla TracemonKey)</span
+            >
+          </span>
+        </div>
+
+        <div
+          class="file-upload-area"
+          :class="{ 'drag-over': isDragOver, loading: isFileLoading }"
+          @dragover="handleDragOver"
+          @dragleave="handleDragLeave"
+          @drop="handleDrop"
+        >
+          <div v-if="isFileLoading" class="upload-loading">
+            <div class="spinner"></div>
+            <span>Loading PDF...</span>
+          </div>
+          <div v-else class="upload-content">
+            <div class="upload-icon">📁</div>
+            <p><strong>Drag & drop</strong> your PDF file here</p>
+            <p>or</p>
+            <label class="upload-button">
+              <input
+                type="file"
+                accept=".pdf,application/pdf"
+                style="display: none"
+                @change="handleFileInputChange"
+              />
+              Choose PDF File
+            </label>
+          </div>
+        </div>
+
+        <div class="document-actions">
+          <button
+            v-if="uploadedFileName"
+            class="reset-button"
+            @click="resetToDefault"
+          >
+            🔄 Use Default PDF
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Cache Statistics Panel -->
     <div class="stats-panel">
@@ -671,6 +805,160 @@ body {
     span {
       font-weight: normal;
       opacity: 0.8;
+    }
+  }
+}
+
+/* File Upload Styles */
+.current-document {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #6c757d;
+
+  label {
+    font-weight: 600;
+    color: #495057;
+    margin-right: 0.5rem;
+  }
+
+  .document-info {
+    font-weight: 600;
+    color: #212529;
+
+    .document-url {
+      font-weight: normal;
+      color: #6c757d;
+      font-size: 0.875em;
+    }
+  }
+}
+
+.file-upload-area {
+  border: 2px dashed #dee2e6;
+  border-radius: 8px;
+  padding: 2rem;
+  text-align: center;
+  transition: all 0.3s ease;
+  background: #fafafa;
+  margin: 1rem 0;
+  cursor: pointer;
+
+  &:hover {
+    border-color: #007bff;
+    background: #f0f8ff;
+  }
+
+  &.drag-over {
+    border-color: #28a745;
+    background: #f0fff4;
+    transform: scale(1.02);
+  }
+
+  &.loading {
+    border-color: #007bff;
+    background: #f0f8ff;
+    cursor: not-allowed;
+  }
+
+  .upload-content {
+    .upload-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.7;
+    }
+
+    p {
+      margin: 0.5rem 0;
+      color: #495057;
+
+      strong {
+        color: #007bff;
+      }
+    }
+  }
+
+  .upload-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    color: #007bff;
+    font-weight: 600;
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid #e3f2fd;
+      border-top: 3px solid #007bff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+  }
+}
+
+.upload-button {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background: #007bff;
+  color: white;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background: #0056b3;
+  }
+}
+
+.document-actions {
+  text-align: center;
+  margin-top: 1rem;
+
+  .reset-button {
+    padding: 0.5rem 1rem;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+
+    &:hover {
+      background: #545b62;
+    }
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 768px) {
+  .file-upload-area {
+    padding: 1.5rem;
+
+    .upload-content .upload-icon {
+      font-size: 2rem;
+    }
+  }
+
+  .current-document {
+    .document-info {
+      display: block;
+
+      .document-url {
+        display: block;
+        margin-top: 0.25rem;
+      }
     }
   }
 }
