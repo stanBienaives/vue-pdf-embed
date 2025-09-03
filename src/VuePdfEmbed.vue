@@ -18,6 +18,7 @@ import {
   releaseChildCanvases,
 } from './utils'
 import { useVuePdfEmbed } from './composables'
+import { textLayerCache, type CacheStats } from './services/textLayerCache'
 
 const props = withDefaults(
   defineProps<{
@@ -25,6 +26,10 @@ const props = withDefaults(
      * Whether to enable an annotation layer.
      */
     annotationLayer?: boolean
+    /**
+     * Whether to enable text layer caching.
+     */
+    enableTextLayerCache?: boolean
     /**
      * Desired page height.
      */
@@ -43,9 +48,17 @@ const props = withDefaults(
      */
     linkService?: PDFLinkService
     /**
+     * Maximum number of pages to keep in text layer cache.
+     */
+    maxTextLayerCacheSize?: number
+    /**
      * Page number(s) to display.
      */
     page?: number | number[]
+    /**
+     * Page numbers to preload into text layer cache.
+     */
+    preloadTextLayerPages?: number[]
     /**
      * Desired page rotation angle.
      */
@@ -68,6 +81,8 @@ const props = withDefaults(
     width?: number
   }>(),
   {
+    enableTextLayerCache: true,
+    maxTextLayerCacheSize: 100,
     rotation: 0,
     scale: 1,
   }
@@ -156,6 +171,61 @@ const getPageDimensions = (ratio: number): [number, number] => {
   }
 
   return [width, height]
+}
+
+/**
+ * Preloads text layer content for specific pages into cache.
+ * @param pages - Page numbers to preload.
+ */
+const preloadTextLayer = async (pages: number[]) => {
+  if (!doc.value || !props.enableTextLayerCache) {
+    return
+  }
+
+  await Promise.all(
+    pages.map(async (pageNum) => {
+      try {
+        // Check if already cached
+        const cached = await textLayerCache.get(props.source, pageNum)
+        if (cached) {
+          return
+        }
+
+        // Load and cache the page's text content
+        const page = await doc.value!.getPage(pageNum)
+        const textContent = await page.getTextContent()
+        await textLayerCache.set(props.source, pageNum, textContent)
+      } catch (error) {
+        console.warn(`Failed to preload text layer for page ${pageNum}:`, error)
+      }
+    })
+  )
+}
+
+/**
+ * Preloads text layer content for all pages in the document.
+ */
+const preloadAllTextLayers = async () => {
+  if (!doc.value || !props.enableTextLayerCache) {
+    return
+  }
+
+  const allPages = [...Array(doc.value.numPages + 1).keys()].slice(1)
+  await preloadTextLayer(allPages)
+}
+
+/**
+ * Gets current text layer cache statistics.
+ */
+const getTextLayerCacheStats = (): CacheStats => {
+  return textLayerCache.getStats()
+}
+
+/**
+ * Clears the text layer cache.
+ */
+const clearTextLayerCache = () => {
+  textLayerCache.clear()
 }
 
 /**
@@ -398,9 +468,26 @@ const renderPageTextLayer = async (
   container: HTMLElement
 ) => {
   emptyElement(container)
+
+  let textContent
+
+  // Try to get from cache first if caching is enabled
+  if (props.enableTextLayerCache) {
+    textContent = await textLayerCache.get(props.source, page.pageNumber)
+  }
+
+  // If not in cache, get from page and cache it
+  if (!textContent) {
+    textContent = await page.getTextContent()
+
+    if (props.enableTextLayerCache) {
+      await textLayerCache.set(props.source, page.pageNumber, textContent)
+    }
+  }
+
   new TextLayer({
     container,
-    textContentSource: await page.getTextContent(),
+    textContentSource: textContent,
     viewport,
   }).render()
 }
@@ -410,6 +497,30 @@ watch(
   (newDoc) => {
     if (newDoc) {
       emit('loaded', newDoc)
+    }
+  },
+  { immediate: true }
+)
+
+// Watch for changes to cache size and update the cache
+watch(
+  () => props.maxTextLayerCacheSize,
+  (newSize) => {
+    if (newSize && props.enableTextLayerCache) {
+      // Create new cache with updated size (this is a limitation of current implementation)
+      textLayerCache.clear()
+    }
+  }
+)
+
+// Watch for preload pages prop changes
+watch(
+  () => [doc.value, props.preloadTextLayerPages] as const,
+  ([newDoc, newPreloadPages]) => {
+    if (newDoc && newPreloadPages && props.enableTextLayerCache) {
+      preloadTextLayer(newPreloadPages).catch((error) => {
+        console.warn('Failed to preload text layer pages:', error)
+      })
     }
   },
   { immediate: true }
@@ -455,6 +566,10 @@ defineExpose({
   doc,
   download,
   print,
+  preloadTextLayer,
+  preloadAllTextLayers,
+  getTextLayerCacheStats,
+  clearTextLayerCache,
 })
 </script>
 
