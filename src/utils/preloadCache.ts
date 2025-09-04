@@ -1,5 +1,8 @@
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist'
-import { textLayerCache } from '../services/textLayerCache'
+import {
+  createCacheManager,
+  type CacheStrategy,
+} from '../services/cacheManager'
 import type { Source } from '../types'
 
 export interface PreloadResult {
@@ -14,6 +17,9 @@ export interface PreloadOptions {
   onProgress?: (loaded: number, total: number) => void
   timeout?: number
   skipCached?: boolean
+  cacheStrategy?: CacheStrategy
+  cacheIndexedDbName?: string
+  cacheExpirationDays?: number
 }
 
 export interface PreloadPageError {
@@ -47,7 +53,27 @@ export async function preloadTextLayerCache(
   pages: number[],
   options: PreloadOptions = {}
 ): Promise<PreloadResult> {
-  const { onProgress, timeout = 30000, skipCached = true } = options
+  const {
+    onProgress,
+    timeout = 30000,
+    skipCached = true,
+    cacheStrategy = 'memory',
+    cacheIndexedDbName,
+    cacheExpirationDays = 7,
+  } = options
+
+  // Create cache manager with specified strategy
+  const cacheManager = createCacheManager({
+    strategy: cacheStrategy,
+    memoryMaxSize: 100,
+    indexedDbOptions: {
+      databaseName: cacheIndexedDbName || 'vue-pdf-embed-preload',
+      expirationDays: cacheExpirationDays,
+      maxEntries: 1000,
+    },
+  })
+
+  const cache = cacheManager.getCache()
 
   if (!source) {
     throw new Error('Source is required for preloading TextLayer cache')
@@ -112,7 +138,7 @@ export async function preloadTextLayerCache(
     if (skipCached) {
       const uncachedPages = []
       for (const pageNum of validPages) {
-        const cachedContent = await textLayerCache.get(source, pageNum)
+        const cachedContent = await cache.get(source, pageNum)
         if (!cachedContent) {
           uncachedPages.push(pageNum)
         } else {
@@ -138,7 +164,7 @@ export async function preloadTextLayerCache(
         try {
           const page = await doc.getPage(pageNum)
           const textContent = await page.getTextContent()
-          await textLayerCache.set(source, pageNum, textContent)
+          await cache.set(source, pageNum, textContent)
 
           completed++
           cached++
@@ -196,8 +222,9 @@ export async function preloadTextLayerCache(
  * ```typescript
  * import { preloadTextLayerCacheAll } from 'vue-pdf-embed'
  *
- * // Preload entire document
+ * // Preload entire document with IndexedDB
  * const result = await preloadTextLayerCacheAll('/document.pdf', {
+ *   cacheStrategy: 'indexeddb',
  *   onProgress: (loaded, total) => {
  *     const percent = Math.round((loaded / total) * 100)
  *     console.log(`${percent}% complete`)

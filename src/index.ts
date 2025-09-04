@@ -9,6 +9,17 @@ import {
   type PreloadResult,
   type PreloadOptions,
 } from './utils/preloadCache'
+import {
+  createCacheManager,
+  getDefaultCacheManager,
+  setDefaultCacheStrategy,
+  type CacheManager,
+} from './services/cacheManager'
+import type {
+  CacheStrategy,
+  CacheConfiguration,
+  IndexedDbCacheOptions,
+} from './types'
 
 if (window?.Vue) {
   window.VuePdfEmbed = VuePdfEmbed
@@ -19,6 +30,20 @@ if (!GlobalWorkerOptions?.workerSrc) {
   GlobalWorkerOptions.workerSrc = PdfWorker
 }
 
-export { useVuePdfEmbed, preloadTextLayerCache, preloadTextLayerCacheAll }
-export type { PreloadResult, PreloadOptions }
+export {
+  useVuePdfEmbed,
+  preloadTextLayerCache,
+  preloadTextLayerCacheAll,
+  createCacheManager,
+  getDefaultCacheManager,
+  setDefaultCacheStrategy,
+}
+export type {
+  PreloadResult,
+  PreloadOptions,
+  CacheStrategy,
+  CacheConfiguration,
+  IndexedDbCacheOptions,
+  CacheManager,
+}
 export default VuePdfEmbed

@@ -6,9 +6,11 @@ import VuePdfEmbed, {
 } from '../src/index'
 import type { CacheStats } from '../src/services/textLayerCache'
 import type { PreloadResult } from '../src/utils/preloadCache'
+import type { CacheStrategy } from '../src/types'
 
 const pdfRef = ref()
 const currentPage = ref(1)
+const displayAllPages = ref(false)
 const cacheStats = ref<CacheStats | null>(null)
 const isLoading = ref(false)
 const preloadPages = ref([1, 2, 3])
@@ -19,6 +21,19 @@ const isDragOver = ref(false)
 const isFileLoading = ref(false)
 const uploadedFileName = ref('')
 const showTextLayer = ref(false)
+const cacheStrategy = ref<CacheStrategy>('memory')
+const indexedDbName = ref('vue-pdf-embed-demo')
+const cacheExpirationDays = ref(7)
+const storageInfo = ref<{
+  strategy: CacheStrategy
+  actualType: 'memory' | 'indexeddb'
+  isIndexedDbSupported: boolean
+  storageEstimate?: {
+    quota?: number
+    usage?: number
+    usageDetails?: Record<string, number>
+  }
+} | null>(null)
 
 // Default PDF URL for multi-page demonstration
 const defaultPdfUrl =
@@ -29,9 +44,17 @@ const pages = computed(() => {
   return pdfRef.value?.doc?.numPages || 0
 })
 
-const updateCacheStats = () => {
+const updateCacheStats = async () => {
   if (pdfRef.value) {
     cacheStats.value = pdfRef.value.getTextLayerCacheStats()
+
+    // Get additional cache information
+    try {
+      const info = await pdfRef.value.getCacheInfo()
+      storageInfo.value = info
+    } catch (error) {
+      console.warn('Failed to get cache info:', error)
+    }
   }
 }
 
@@ -86,11 +109,25 @@ const preloadAllPages = async () => {
   }
 }
 
-const clearCache = () => {
+const clearCache = async () => {
   if (!pdfRef.value) return
-  pdfRef.value.clearTextLayerCache()
-  updateCacheStats()
+  await pdfRef.value.clearTextLayerCache()
+  await updateCacheStats()
   console.log('Cache cleared')
+}
+
+const switchCacheStrategy = async (newStrategy: CacheStrategy) => {
+  cacheStrategy.value = newStrategy
+
+  if (pdfRef.value) {
+    try {
+      await pdfRef.value.switchCacheStrategy(newStrategy)
+      await updateCacheStats()
+      console.log(`Cache strategy switched to: ${newStrategy}`)
+    } catch (error) {
+      console.error('Failed to switch cache strategy:', error)
+    }
+  }
 }
 
 const goToPage = (page: number) => {
@@ -141,11 +178,11 @@ const handleFileUpload = async (file: File) => {
     uploadedFileName.value = file.name
     currentPage.value = 1
 
-    // Clear cache when switching documents
-    if (pdfRef.value) {
-      pdfRef.value.clearTextLayerCache()
-      updateCacheStats()
-    }
+    // // Clear cache when switching documents
+    // if (pdfRef.value) {
+    //   // pdfRef.value.clearTextLayerCache()
+    //   updateCacheStats()
+    // }
 
     console.log(
       `Loaded PDF: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
@@ -210,6 +247,9 @@ const standalonePreloadSelected = async () => {
       pdfSource.value,
       preloadPages.value,
       {
+        cacheStrategy: cacheStrategy.value,
+        cacheIndexedDbName: indexedDbName.value,
+        cacheExpirationDays: cacheExpirationDays.value,
         onProgress: (loaded, total) => {
           standalonePreloadProgress.value = Math.round((loaded / total) * 100)
         },
@@ -242,6 +282,9 @@ const standalonePreloadAll = async () => {
   try {
     const startTime = Date.now()
     const result = await preloadTextLayerCacheAll(pdfSource.value, {
+      cacheStrategy: cacheStrategy.value,
+      cacheIndexedDbName: indexedDbName.value,
+      cacheExpirationDays: cacheExpirationDays.value,
       onProgress: (loaded, total) => {
         standalonePreloadProgress.value = Math.round((loaded / total) * 100)
       },
@@ -326,6 +369,92 @@ onMounted(() => {
           >
             🔄 Use Default PDF
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cache Configuration Panel -->
+    <div class="controls-panel">
+      <h3>💾 Cache Configuration</h3>
+
+      <div class="control-group">
+        <label>Cache Strategy:</label>
+        <div class="strategy-controls">
+          <button
+            v-for="strategy in ['memory', 'indexeddb', 'auto']"
+            :key="strategy"
+            :class="{ active: cacheStrategy === strategy }"
+            @click="switchCacheStrategy(strategy as CacheStrategy)"
+          >
+            {{ strategy }}
+          </button>
+        </div>
+        <div class="strategy-info">
+          <p v-if="cacheStrategy === 'memory'">
+            <strong>Memory:</strong> Fast, session-only caching. Data lost on
+            refresh.
+          </p>
+          <p v-else-if="cacheStrategy === 'indexeddb'">
+            <strong>IndexedDB:</strong> Persistent caching across sessions.
+            Larger capacity.
+          </p>
+          <p v-else>
+            <strong>Auto:</strong> IndexedDB if available, fallback to memory.
+          </p>
+        </div>
+      </div>
+
+      <div
+        v-if="cacheStrategy === 'indexeddb' || cacheStrategy === 'auto'"
+        class="control-group"
+      >
+        <label>IndexedDB Database Name:</label>
+        <input
+          v-model="indexedDbName"
+          type="text"
+          placeholder="vue-pdf-embed-demo"
+        />
+
+        <label>Cache Expiration (days):</label>
+        <input
+          v-model.number="cacheExpirationDays"
+          type="number"
+          min="1"
+          max="365"
+        />
+      </div>
+
+      <div v-if="storageInfo" class="control-group">
+        <div class="storage-info">
+          <h4>Storage Information</h4>
+          <p><strong>Current Strategy:</strong> {{ storageInfo.strategy }}</p>
+          <p>
+            <strong>Actual Cache Type:</strong> {{ storageInfo.actualType }}
+          </p>
+          <p>
+            <strong>IndexedDB Supported:</strong>
+            {{ storageInfo.isIndexedDbSupported ? 'Yes' : 'No' }}
+          </p>
+          <div v-if="storageInfo.storageEstimate">
+            <p>
+              <strong>Storage Usage:</strong>
+              {{
+                Math.round(
+                  (storageInfo.storageEstimate.usage || 0) / 1024 / 1024
+                )
+              }}
+              MB
+            </p>
+            <p>
+              <strong>Storage Quota:</strong>
+              {{
+                Math.round(
+                  (storageInfo.storageEstimate.quota || 0) / 1024 / 1024
+                )
+              }}
+              MB
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -448,7 +577,23 @@ onMounted(() => {
           >
             {{ page }}
           </button>
+          <button v-if="currentPage > 1" @click="goToPage(currentPage - 1)">
+            ‹ Prev
+          </button>
+          <button v-if="currentPage < pages" @click="goToPage(currentPage + 1)">
+            Next ›
+          </button>
+          <button
+            v-if="pages > 10"
+            :class="{ active: currentPage === pages }"
+            @click="goToPage(pages)"
+          >
+            Last Page
+          </button>
           <span v-if="pages > 10">... ({{ pages }} total)</span>
+          <button @click="displayAllPages = !displayAllPages">
+            {{ displayAllPages ? 'Show Single Page' : 'Show All Pages' }}
+          </button>
         </div>
       </div>
     </div>
@@ -476,10 +621,13 @@ onMounted(() => {
       <VuePdfEmbed
         ref="pdfRef"
         :source="pdfSource"
-        :page="currentPage"
+        :page="displayAllPages ? undefined : currentPage"
         :text-layer="true"
         :enable-text-layer-cache="true"
-        :max-text-layer-cache-size="50"
+        :cache-strategy="cacheStrategy"
+        :cache-indexed-db-name="indexedDbName"
+        :cache-expiration-days="cacheExpirationDays"
+        :max-text-layer-cache-size="500"
         @loaded="onDocumentLoaded"
         @rendered="onRendered"
       />
@@ -1070,6 +1218,78 @@ body {
         margin-top: 0.25rem;
       }
     }
+  }
+}
+
+/* Cache Strategy Controls */
+.strategy-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  button {
+    padding: 0.5rem 1rem;
+    background: #f8f9fa;
+    color: #495057;
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
+    font-weight: 600;
+    text-transform: capitalize;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+      background: #e9ecef;
+      border-color: #adb5bd;
+    }
+
+    &.active {
+      background: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+  }
+}
+
+.strategy-info {
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #17a2b8;
+  margin-bottom: 1rem;
+
+  p {
+    margin: 0;
+    color: #495057;
+    font-size: 0.9em;
+  }
+
+  strong {
+    color: #17a2b8;
+  }
+}
+
+.storage-info {
+  padding: 1rem;
+  background: #e7f3ff;
+  border-radius: 6px;
+  border-left: 4px solid #007bff;
+
+  h4 {
+    margin-top: 0;
+    margin-bottom: 0.75rem;
+    color: #0056b3;
+  }
+
+  p {
+    margin: 0.25rem 0;
+    color: #495057;
+    font-size: 0.9em;
+  }
+
+  strong {
+    color: #0056b3;
   }
 }
 

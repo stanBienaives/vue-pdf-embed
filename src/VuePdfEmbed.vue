@@ -9,7 +9,12 @@ import type {
   PageViewport,
 } from 'pdfjs-dist'
 
-import type { PasswordRequestParams, Source } from './types'
+import type {
+  PasswordRequestParams,
+  Source,
+  CacheStrategy,
+  CacheConfiguration,
+} from './types'
 import {
   addPrintStyles,
   createPrintIframe,
@@ -18,7 +23,8 @@ import {
   releaseChildCanvases,
 } from './utils'
 import { useVuePdfEmbed } from './composables'
-import { textLayerCache, type CacheStats } from './services/textLayerCache'
+import { type CacheStats } from './services/textLayerCache'
+import { CacheManager } from './services/cacheManager'
 
 const props = withDefaults(
   defineProps<{
@@ -26,6 +32,18 @@ const props = withDefaults(
      * Whether to enable an annotation layer.
      */
     annotationLayer?: boolean
+    /**
+     * Cache strategy to use for text layer caching.
+     */
+    cacheStrategy?: CacheStrategy
+    /**
+     * Database name for IndexedDB cache (when using indexeddb strategy).
+     */
+    cacheIndexedDbName?: string
+    /**
+     * Number of days to keep cached content (IndexedDB only).
+     */
+    cacheExpirationDays?: number
     /**
      * Whether to enable text layer caching.
      */
@@ -81,6 +99,8 @@ const props = withDefaults(
     width?: number
   }>(),
   {
+    cacheStrategy: 'memory',
+    cacheExpirationDays: 7,
     enableTextLayerCache: true,
     maxTextLayerCacheSize: 100,
     rotation: 0,
@@ -104,6 +124,27 @@ const root = shallowRef<HTMLDivElement | null>(null)
 
 let renderingController: { isAborted: boolean; promise: Promise<void> } | null =
   null
+
+// Create cache manager instance based on props
+const cacheManager = computed(() => {
+  if (!props.enableTextLayerCache) {
+    return null
+  }
+
+  const config: CacheConfiguration = {
+    strategy: props.cacheStrategy,
+    memoryMaxSize: props.maxTextLayerCacheSize,
+    indexedDbOptions: {
+      databaseName: props.cacheIndexedDbName || 'vue-pdf-embed-cache',
+      expirationDays: props.cacheExpirationDays,
+      maxEntries: props.maxTextLayerCacheSize * 10, // More entries for persistent cache
+    },
+  }
+
+  return new CacheManager(config)
+})
+
+const cache = computed(() => cacheManager.value?.getCache() || null)
 
 const { doc } = useVuePdfEmbed({
   onError: (e) => {
@@ -178,7 +219,7 @@ const getPageDimensions = (ratio: number): [number, number] => {
  * @param pages - Page numbers to preload.
  */
 const preloadTextLayer = async (pages: number[]) => {
-  if (!doc.value || !props.enableTextLayerCache) {
+  if (!doc.value || !cache.value) {
     return
   }
 
@@ -186,7 +227,7 @@ const preloadTextLayer = async (pages: number[]) => {
     pages.map(async (pageNum) => {
       try {
         // Check if already cached
-        const cached = await textLayerCache.get(props.source, pageNum)
+        const cached = await cache.value!.get(props.source, pageNum)
         if (cached) {
           return
         }
@@ -194,7 +235,7 @@ const preloadTextLayer = async (pages: number[]) => {
         // Load and cache the page's text content
         const page = await doc.value!.getPage(pageNum)
         const textContent = await page.getTextContent()
-        await textLayerCache.set(props.source, pageNum, textContent)
+        await cache.value!.set(props.source, pageNum, textContent)
       } catch (error) {
         console.warn(`Failed to preload text layer for page ${pageNum}:`, error)
       }
@@ -206,7 +247,7 @@ const preloadTextLayer = async (pages: number[]) => {
  * Preloads text layer content for all pages in the document.
  */
 const preloadAllTextLayers = async () => {
-  if (!doc.value || !props.enableTextLayerCache) {
+  if (!doc.value || !cache.value) {
     return
   }
 
@@ -218,14 +259,44 @@ const preloadAllTextLayers = async () => {
  * Gets current text layer cache statistics.
  */
 const getTextLayerCacheStats = (): CacheStats => {
-  return textLayerCache.getStats()
+  return (
+    cache.value?.getStats() || {
+      size: 0,
+      maxSize: 0,
+      hitRate: 0,
+      totalRequests: 0,
+      hitCount: 0,
+      missCount: 0,
+    }
+  )
 }
 
 /**
  * Clears the text layer cache.
  */
-const clearTextLayerCache = () => {
-  textLayerCache.clear()
+const clearTextLayerCache = async () => {
+  if (cache.value) {
+    await cache.value.clear()
+  }
+}
+
+/**
+ * Gets information about the current cache strategy and storage.
+ */
+const getCacheInfo = async () => {
+  if (!cacheManager.value) {
+    return { strategy: 'disabled' }
+  }
+  return cacheManager.value.getStorageInfo()
+}
+
+/**
+ * Switches the cache strategy at runtime.
+ */
+const switchCacheStrategy = async (strategy: CacheStrategy) => {
+  if (cacheManager.value) {
+    await cacheManager.value.switchStrategy(strategy)
+  }
 }
 
 /**
@@ -472,16 +543,16 @@ const renderPageTextLayer = async (
   let textContent
 
   // Try to get from cache first if caching is enabled
-  if (props.enableTextLayerCache) {
-    textContent = await textLayerCache.get(props.source, page.pageNumber)
+  if (cache.value) {
+    textContent = await cache.value.get(props.source, page.pageNumber)
   }
 
   // If not in cache, get from page and cache it
   if (!textContent) {
     textContent = await page.getTextContent()
 
-    if (props.enableTextLayerCache) {
-      await textLayerCache.set(props.source, page.pageNumber, textContent)
+    if (cache.value) {
+      await cache.value.set(props.source, page.pageNumber, textContent)
     }
   }
 
@@ -502,13 +573,22 @@ watch(
   { immediate: true }
 )
 
-// Watch for changes to cache size and update the cache
+// Watch for changes to cache configuration and recreate cache manager
 watch(
-  () => props.maxTextLayerCacheSize,
-  (newSize) => {
-    if (newSize && props.enableTextLayerCache) {
-      // Create new cache with updated size (this is a limitation of current implementation)
-      textLayerCache.clear()
+  () =>
+    [
+      props.cacheStrategy,
+      props.maxTextLayerCacheSize,
+      props.cacheIndexedDbName,
+      props.cacheExpirationDays,
+      props.enableTextLayerCache,
+    ] as const,
+  ([newStrategy], [oldStrategy]) => {
+    if (oldStrategy && newStrategy !== oldStrategy && cacheManager.value) {
+      // Clear old cache when strategy changes
+      if (cache.value) {
+        cache.value.clear()
+      }
     }
   }
 )
@@ -517,7 +597,7 @@ watch(
 watch(
   () => [doc.value, props.preloadTextLayerPages] as const,
   ([newDoc, newPreloadPages]) => {
-    if (newDoc && newPreloadPages && props.enableTextLayerCache) {
+    if (newDoc && newPreloadPages && cache.value) {
       preloadTextLayer(newPreloadPages).catch((error) => {
         console.warn('Failed to preload text layer pages:', error)
       })
@@ -570,6 +650,8 @@ defineExpose({
   preloadAllTextLayers,
   getTextLayerCacheStats,
   clearTextLayerCache,
+  getCacheInfo,
+  switchCacheStrategy,
 })
 </script>
 
