@@ -14,6 +14,7 @@ import type {
   Source,
   CacheStrategy,
   CacheConfiguration,
+  TextLayerProgressParams,
 } from './types'
 import {
   addPrintStyles,
@@ -116,11 +117,14 @@ const emit = defineEmits<{
   (e: 'progress', value: OnProgressParameters): void
   (e: 'rendered'): void
   (e: 'rendering-failed', value: Error): void
+  (e: 'text-layer-progress', value: TextLayerProgressParams): void
 }>()
 
 const pageNums = shallowRef<number[]>([])
 const pageScales = ref<number[]>([])
 const root = shallowRef<HTMLDivElement | null>(null)
+// Use non-reactive tracking to avoid triggering watchers
+const textLayerCompletedPages = new Set<number>()
 
 let renderingController: { isAborted: boolean; promise: Promise<void> } | null =
   null
@@ -396,6 +400,9 @@ const render = async () => {
       : [...Array(doc.value.numPages + 1).keys()].slice(1)
     pageScales.value = Array(pageNums.value.length).fill(1)
 
+    // Reset completed pages tracking for new render cycle
+    textLayerCompletedPages.clear()
+
     await Promise.all(
       pageNums.value.map(async (pageNum, i) => {
         const page = await doc.value!.getPage(pageNum)
@@ -445,7 +452,8 @@ const render = async () => {
               viewport.clone({
                 dontFlip: true,
               }),
-              div1
+              div1,
+              pageNums.value.length
             )
           )
         }
@@ -538,7 +546,8 @@ const renderPageAnnotationLayer = async (
 const renderPageTextLayer = async (
   page: PDFPageProxy,
   viewport: PageViewport,
-  container: HTMLElement
+  container: HTMLElement,
+  totalPages: number = 1
 ) => {
   const totalStartTime = performance.now()
   console.log(`🔄 TextLayer render started for page ${page.pageNumber}`)
@@ -635,6 +644,21 @@ const renderPageTextLayer = async (
   console.log(
     `   🎯 Cache: ${cacheHit ? '✅ HIT' : '❌ MISS'}, Items: ${itemCount}, Chars: ${textLength}`
   )
+
+  // Track completed page
+  textLayerCompletedPages.add(page.pageNumber)
+  const completedCount = textLayerCompletedPages.size
+  const percentage = totalPages > 0 ? (completedCount / totalPages) * 100 : 100
+
+  // Emit progress event with accurate tracking
+  emit('text-layer-progress', {
+    currentPage: completedCount,
+    totalPages,
+    percentage,
+    renderTime: totalTime,
+    cacheHit,
+    pageNumber: page.pageNumber,
+  })
 }
 
 watch(
@@ -676,19 +700,10 @@ watch(
   { immediate: true }
 )
 
+// Watch for document changes
 watch(
-  () => [
-    doc.value,
-    props.annotationLayer,
-    props.height,
-    props.imageResourcesPath,
-    props.page,
-    props.rotation,
-    props.scale,
-    props.textLayer,
-    props.width,
-  ],
-  async ([newDoc]) => {
+  doc,
+  async (newDoc) => {
     if (newDoc) {
       if (renderingController) {
         renderingController.isAborted = true
@@ -706,6 +721,37 @@ watch(
     }
   },
   { immediate: true }
+)
+
+// Watch for prop changes that require re-rendering
+watch(
+  () => [
+    props.annotationLayer,
+    props.height,
+    props.imageResourcesPath,
+    props.page,
+    props.rotation,
+    props.scale,
+    props.textLayer,
+    props.width,
+  ],
+  async () => {
+    if (doc.value) {
+      if (renderingController) {
+        renderingController.isAborted = true
+        await renderingController.promise
+      }
+
+      releaseChildCanvases(root.value)
+      renderingController = {
+        isAborted: false,
+        promise: render(),
+      }
+
+      await renderingController.promise
+      renderingController = null
+    }
+  }
 )
 
 onBeforeUnmount(() => {

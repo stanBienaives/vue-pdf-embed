@@ -6,7 +6,7 @@ import VuePdfEmbed, {
 } from '../src/index'
 import type { CacheStats } from '../src/services/textLayerCache'
 import type { PreloadResult } from '../src/utils/preloadCache'
-import type { CacheStrategy } from '../src/types'
+import type { CacheStrategy, TextLayerProgressParams } from '../src/types'
 
 const pdfRef = ref()
 const currentPage = ref(1)
@@ -34,6 +34,17 @@ const storageInfo = ref<{
     usageDetails?: Record<string, number>
   }
 } | null>(null)
+
+// Text layer rendering progress
+const textLayerProgress = ref({
+  currentPage: 0,
+  totalPages: 0,
+  percentage: 0,
+  renderTime: 0,
+  cacheHit: false,
+  pageNumber: 0,
+})
+const isRenderingTextLayers = ref(false)
 
 // Default PDF URL for multi-page demonstration
 const defaultPdfUrl =
@@ -67,11 +78,20 @@ const onRendered = () => {
   console.log('Rendered')
   updateCacheStats()
   renderTime.value = Date.now()
+  isRenderingTextLayers.value = false
 
   // Apply TextLayer visualization if enabled
   if (showTextLayer.value) {
     applyTextLayerVisualization()
   }
+}
+
+const onTextLayerProgress = (params: TextLayerProgressParams) => {
+  textLayerProgress.value = params
+  isRenderingTextLayers.value = params.percentage < 100
+  console.log(
+    `TextLayer Progress: ${params.currentPage}/${params.totalPages} (${params.percentage.toFixed(1)}%) - ${params.cacheHit ? 'Cache HIT' : 'Cache MISS'} - ${params.renderTime.toFixed(1)}ms`
+  )
 }
 
 const preloadSelectedPages = async () => {
@@ -619,6 +639,34 @@ onMounted(() => {
         </span>
       </div>
 
+      <!-- Text Layer Rendering Progress Bar -->
+      <div v-if="isRenderingTextLayers" class="text-layer-progress">
+        <div class="progress-header">
+          <span>📄 Rendering Text Layers</span>
+          <span class="progress-details">
+            {{ textLayerProgress.currentPage }} of
+            {{ textLayerProgress.totalPages }} pages completed
+            <span v-if="textLayerProgress.pageNumber"
+              >(Page #{{ textLayerProgress.pageNumber }}
+              {{
+                textLayerProgress.cacheHit ? 'from cache' : 'rendered'
+              }})</span
+            >
+          </span>
+        </div>
+        <div class="progress-bar">
+          <div
+            class="progress-fill"
+            :class="{ cached: textLayerProgress.cacheHit }"
+            :style="{ width: `${textLayerProgress.percentage}%` }"
+          ></div>
+        </div>
+        <div class="progress-footer">
+          <span>{{ textLayerProgress.percentage.toFixed(0) }}% Complete</span>
+          <span>Last: {{ textLayerProgress.renderTime.toFixed(0) }}ms</span>
+        </div>
+      </div>
+
       <VuePdfEmbed
         ref="pdfRef"
         :source="pdfSource"
@@ -631,6 +679,7 @@ onMounted(() => {
         :max-text-layer-cache-size="500"
         @loaded="onDocumentLoaded"
         @rendered="onRendered"
+        @text-layer-progress="onTextLayerProgress"
       />
     </div>
 
@@ -1012,6 +1061,97 @@ body {
     &:disabled {
       background: #6c757d;
     }
+  }
+}
+
+.text-layer-progress {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  color: white;
+  animation: slideDown 0.3s ease-out;
+
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    font-weight: 600;
+
+    .progress-details {
+      font-size: 0.9rem;
+      opacity: 0.95;
+    }
+  }
+
+  .progress-bar {
+    position: relative;
+    width: 100%;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4ade80 0%, #22c55e 100%);
+      border-radius: 12px;
+      transition: width 0.3s ease-out;
+      box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+      position: relative;
+      overflow: hidden;
+
+      &.cached {
+        background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
+        box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
+      }
+
+      &::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(255, 255, 255, 0.3) 50%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        animation: shimmer 2s infinite;
+      }
+    }
+  }
+
+  .progress-footer {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    opacity: 0.9;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
   }
 }
 

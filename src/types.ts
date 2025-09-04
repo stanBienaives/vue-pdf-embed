@@ -21,3 +21,12 @@ export interface CacheConfiguration {
   memoryMaxSize?: number
   indexedDbOptions?: IndexedDbCacheOptions
 }
+
+export interface TextLayerProgressParams {
+  currentPage: number
+  totalPages: number
+  percentage: number
+  renderTime: number
+  cacheHit: boolean
+  pageNumber: number
+}
