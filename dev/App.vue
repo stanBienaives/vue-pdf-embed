@@ -86,12 +86,26 @@ const onRendered = () => {
   }
 }
 
+// Throttle progress updates to prevent recursive updates with many pages
+let latestProgressParams: TextLayerProgressParams | null = null
+let updateScheduled = false
+
 const onTextLayerProgress = (params: TextLayerProgressParams) => {
-  textLayerProgress.value = params
-  isRenderingTextLayers.value = params.percentage < 100
-  console.log(
-    `TextLayer Progress: ${params.currentPage}/${params.totalPages} (${params.percentage.toFixed(1)}%) - ${params.cacheHit ? 'Cache HIT' : 'Cache MISS'} - ${params.renderTime.toFixed(1)}ms`
-  )
+  latestProgressParams = params
+
+  if (!updateScheduled) {
+    updateScheduled = true
+    requestAnimationFrame(() => {
+      if (latestProgressParams) {
+        textLayerProgress.value = latestProgressParams
+        isRenderingTextLayers.value = latestProgressParams.percentage < 100
+        console.log(
+          `TextLayer Progress: ${latestProgressParams.currentPage}/${latestProgressParams.totalPages} (${latestProgressParams.percentage.toFixed(1)}%) - ${latestProgressParams.cacheHit ? 'Cache HIT' : 'Cache MISS'} - ${latestProgressParams.renderTime.toFixed(1)}ms`
+        )
+      }
+      updateScheduled = false
+    })
+  }
 }
 
 const preloadSelectedPages = async () => {

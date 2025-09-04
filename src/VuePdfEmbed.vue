@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, toRef, watch } from 'vue'
+import { computed, onBeforeUnmount, shallowRef, toRef, watch } from 'vue'
 import { AnnotationLayer, TextLayer } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { PDFLinkService } from 'pdfjs-dist/web/pdf_viewer.mjs'
 import type {
@@ -98,6 +98,10 @@ const props = withDefaults(
      * Desired page width.
      */
     width?: number
+    /**
+     * Whether to enable debug logging for performance metrics.
+     */
+    debug?: boolean
   }>(),
   {
     cacheStrategy: 'memory',
@@ -106,6 +110,7 @@ const props = withDefaults(
     maxTextLayerCacheSize: 100,
     rotation: 0,
     scale: 1,
+    debug: false,
   }
 )
 
@@ -121,7 +126,7 @@ const emit = defineEmits<{
 }>()
 
 const pageNums = shallowRef<number[]>([])
-const pageScales = ref<number[]>([])
+const pageScales = shallowRef<number[]>([])
 const root = shallowRef<HTMLDivElement | null>(null)
 // Use non-reactive tracking to avoid triggering watchers
 const textLayerCompletedPages = new Set<number>()
@@ -398,7 +403,7 @@ const render = async () => {
         ? props.page
         : [props.page]
       : [...Array(doc.value.numPages + 1).keys()].slice(1)
-    pageScales.value = Array(pageNums.value.length).fill(1)
+    const newPageScales = Array(pageNums.value.length).fill(1)
 
     // Reset completed pages tracking for new render cycle
     textLayerCompletedPages.clear()
@@ -429,7 +434,7 @@ const render = async () => {
           rotation: pageRotation,
         })
 
-        pageScales.value[i] = pageScale
+        newPageScales[i] = pageScale
 
         canvas.style.display = 'block'
         canvas.style.width = cssWidth
@@ -473,6 +478,9 @@ const render = async () => {
         return Promise.all(renderTasks)
       })
     )
+
+    // Update pageScales after all calculations are done
+    pageScales.value = newPageScales
 
     if (!renderingController?.isAborted) {
       emit('rendered')
@@ -550,13 +558,17 @@ const renderPageTextLayer = async (
   totalPages: number = 1
 ) => {
   const totalStartTime = performance.now()
-  console.log(`🔄 TextLayer render started for page ${page.pageNumber}`)
+  if (props.debug) {
+    console.log(`🔄 TextLayer render started for page ${page.pageNumber}`)
+  }
 
   // Step 1: Clear container
   const emptyStartTime = performance.now()
   emptyElement(container)
   const emptyTime = performance.now() - emptyStartTime
-  console.log(`  ⏱️  Container cleared: ${emptyTime.toFixed(2)}ms`)
+  if (props.debug) {
+    console.log(`  ⏱️  Container cleared: ${emptyTime.toFixed(2)}ms`)
+  }
 
   let textContent
   let cacheHit = false
@@ -564,9 +576,11 @@ const renderPageTextLayer = async (
   // Step 2: Try to get from cache first
   const cacheStartTime = performance.now()
   if (cache.value) {
-    console.log(
-      `  🔍 Cache type: ${cacheManager.value?.getActualCacheType() || 'unknown'}`
-    )
+    if (props.debug) {
+      console.log(
+        `  🔍 Cache type: ${cacheManager.value?.getActualCacheType() || 'unknown'}`
+      )
+    }
     // Use doc.value for cache key if available (it has fingerprint), otherwise use props.source
     const cacheKey = doc.value || props.source
     textContent = await cache.value.get(cacheKey, page.pageNumber)
@@ -575,18 +589,20 @@ const renderPageTextLayer = async (
   const cacheTime = performance.now() - cacheStartTime
 
   // Detailed cache timing analysis
-  if (cacheTime > 100) {
-    console.warn(
-      `  ⚠️  SLOW cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Consider switching cache strategy`
-    )
-  } else if (cacheTime > 10) {
-    console.log(
-      `  ⏱️  Cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Performance acceptable`
-    )
-  } else {
-    console.log(
-      `  ⚡ Fast cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms`
-    )
+  if (props.debug) {
+    if (cacheTime > 100) {
+      console.warn(
+        `  ⚠️  SLOW cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Consider switching cache strategy`
+      )
+    } else if (cacheTime > 10) {
+      console.log(
+        `  ⏱️  Cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Performance acceptable`
+      )
+    } else {
+      console.log(
+        `  ⚡ Fast cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms`
+      )
+    }
   }
 
   // Step 3: Get text content from PDF if not cached
@@ -596,7 +612,9 @@ const renderPageTextLayer = async (
     const extractStartTime = performance.now()
     textContent = await page.getTextContent()
     extractTime = performance.now() - extractStartTime
-    console.log(`  ⏱️  Text extraction from PDF: ${extractTime.toFixed(2)}ms`)
+    if (props.debug) {
+      console.log(`  ⏱️  Text extraction from PDF: ${extractTime.toFixed(2)}ms`)
+    }
 
     // Step 4: Store in cache
     if (cache.value) {
@@ -605,7 +623,9 @@ const renderPageTextLayer = async (
       const cacheKey = doc.value || props.source
       await cache.value.set(cacheKey, page.pageNumber, textContent)
       cacheStoreTime = performance.now() - cacheStoreStartTime
-      console.log(`  ⏱️  Cache storage: ${cacheStoreTime.toFixed(2)}ms`)
+      if (props.debug) {
+        console.log(`  ⏱️  Cache storage: ${cacheStoreTime.toFixed(2)}ms`)
+      }
     }
   }
 
@@ -616,9 +636,11 @@ const renderPageTextLayer = async (
       sum + (typeof item === 'object' && 'str' in item ? item.str.length : 0)
     )
   }, 0)
-  console.log(
-    `  📊 Text complexity: ${itemCount} items, ${textLength} characters`
-  )
+  if (props.debug) {
+    console.log(
+      `  📊 Text complexity: ${itemCount} items, ${textLength} characters`
+    )
+  }
 
   // Step 6: Create and render TextLayer
   const renderStartTime = performance.now()
@@ -630,20 +652,24 @@ const renderPageTextLayer = async (
 
   await textLayer.render()
   const renderTime = performance.now() - renderStartTime
-  console.log(`  ⏱️  TextLayer.render(): ${renderTime.toFixed(2)}ms`)
+  if (props.debug) {
+    console.log(`  ⏱️  TextLayer.render(): ${renderTime.toFixed(2)}ms`)
+  }
 
   // Final timing summary
   const totalTime = performance.now() - totalStartTime
 
-  console.log(
-    `✅ TextLayer page ${page.pageNumber} completed in ${totalTime.toFixed(2)}ms`
-  )
-  console.log(
-    `   📈 Breakdown: Empty=${emptyTime.toFixed(1)}ms, Cache=${cacheTime.toFixed(1)}ms, Extract=${extractTime.toFixed(1)}ms, Store=${cacheStoreTime.toFixed(1)}ms, Render=${renderTime.toFixed(1)}ms`
-  )
-  console.log(
-    `   🎯 Cache: ${cacheHit ? '✅ HIT' : '❌ MISS'}, Items: ${itemCount}, Chars: ${textLength}`
-  )
+  if (props.debug) {
+    console.log(
+      `✅ TextLayer page ${page.pageNumber} completed in ${totalTime.toFixed(2)}ms`
+    )
+    console.log(
+      `   📈 Breakdown: Empty=${emptyTime.toFixed(1)}ms, Cache=${cacheTime.toFixed(1)}ms, Extract=${extractTime.toFixed(1)}ms, Store=${cacheStoreTime.toFixed(1)}ms, Render=${renderTime.toFixed(1)}ms`
+    )
+    console.log(
+      `   🎯 Cache: ${cacheHit ? '✅ HIT' : '❌ MISS'}, Items: ${itemCount}, Chars: ${textLength}`
+    )
+  }
 
   // Track completed page
   textLayerCompletedPages.add(page.pageNumber)

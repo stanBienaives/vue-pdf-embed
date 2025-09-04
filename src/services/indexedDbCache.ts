@@ -387,9 +387,6 @@ export class IndexedDbCache implements TextLayerCacheInterface {
         fingerprint = source._pdfInfo.fingerprints?.[0] || 'unknown'
       }
       sourceKey = `doc:${fingerprint}`
-      console.log(
-        `🔑 IndexedDB cache key (async): doc:${fingerprint} for page ${pageNumber}`
-      )
     } else {
       const serialized = JSON.stringify(source, null, 0)
       sourceKey = await this.hashString(serialized)
@@ -497,9 +494,6 @@ export class IndexedDbCache implements TextLayerCacheInterface {
         fingerprint = source._pdfInfo.fingerprints?.[0] || 'unknown'
       }
       sourceKey = `doc:${fingerprint}`
-      console.log(
-        `🔑 IndexedDB cache key (sync): doc:${fingerprint} for page ${pageNumber}`
-      )
     } else {
       // Simple stringify for objects
       sourceKey = this.fastHashString(JSON.stringify(source, null, 0))
