@@ -69,9 +69,8 @@ export class CacheManager {
   async switchStrategy(newStrategy: CacheStrategy): Promise<void> {
     if (newStrategy === this.strategy) return
 
-    // Clear current cache before switching
-    await this.cache.clear()
-
+    // Don't clear cache when switching strategies
+    // Users may want to test different strategies with same cached data
     this.strategy = newStrategy
     this.configuration.strategy = newStrategy
     this.cache = this.createCache()

@@ -556,11 +556,19 @@ const renderPageTextLayer = async (
     }
   }
 
-  new TextLayer({
+  console.log('Start Rendering text content for page', page.pageNumber)
+  const time = Date.now()
+  await new TextLayer({
     container,
     textContentSource: textContent,
     viewport,
   }).render()
+  console.log(
+    'Finished rendering text content for page',
+    page.pageNumber,
+    Date.now() - time,
+    'ms'
+  )
 }
 
 watch(
@@ -583,13 +591,9 @@ watch(
       props.cacheExpirationDays,
       props.enableTextLayerCache,
     ] as const,
-  ([newStrategy], [oldStrategy]) => {
-    if (oldStrategy && newStrategy !== oldStrategy && cacheManager.value) {
-      // Clear old cache when strategy changes
-      if (cache.value) {
-        cache.value.clear()
-      }
-    }
+  () => {
+    // Cache manager will be recreated automatically via computed property
+    // No need to manually clear cache when switching strategies
   }
 )
 

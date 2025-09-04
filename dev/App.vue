@@ -64,6 +64,7 @@ const onDocumentLoaded = async () => {
 }
 
 const onRendered = () => {
+  console.log('Rendered')
   updateCacheStats()
   renderTime.value = Date.now()
 
