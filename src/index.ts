@@ -30,13 +30,6 @@ if (!GlobalWorkerOptions?.workerSrc) {
   GlobalWorkerOptions.workerSrc = PdfWorker
 }
 
-let initialized = false
-export function initPdfjsWorker() {
-  if (initialized) return
-  GlobalWorkerOptions.workerSrc = PdfWorker
-  initialized = true
-}
-
 export {
   useVuePdfEmbed,
   preloadTextLayerCache,

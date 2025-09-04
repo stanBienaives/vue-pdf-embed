@@ -5,6 +5,16 @@ import {
 } from '../services/cacheManager'
 import type { Source } from '../types'
 
+import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+
+// 🔒 Toujours garantir le worker ici, côté util
+function ensureWorker() {
+  if (!GlobalWorkerOptions?.workerSrc) {
+    GlobalWorkerOptions.workerSrc = PdfWorker
+  }
+}
+
 export interface PreloadResult {
   success: boolean
   cached: number
@@ -53,6 +63,7 @@ export async function preloadTextLayerCache(
   pages: number[],
   options: PreloadOptions = {}
 ): Promise<PreloadResult> {
+  ensureWorker()
   const {
     onProgress,
     timeout = 30000,
@@ -241,6 +252,7 @@ export async function preloadTextLayerCacheAll(
   if (!source) {
     throw new Error('Source is required for preloading TextLayer cache')
   }
+  ensureWorker()
 
   try {
     // Handle PDFDocumentProxy directly
