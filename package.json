@@ -1,6 +1,6 @@
 {
   "name": "@stanbienaives/vue-pdf-embed",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "PDF embed component for Vue with TextLayer caching and preloading",
   "keywords": [
     "vue",
