@@ -558,17 +558,20 @@ const renderPageTextLayer = async (
 
   console.log('Start Rendering text content for page', page.pageNumber)
   const time = Date.now()
-  await new TextLayer({
+  new TextLayer({
     container,
     textContentSource: textContent,
     viewport,
-  }).render()
-  console.log(
-    'Finished rendering text content for page',
-    page.pageNumber,
-    Date.now() - time,
-    'ms'
-  )
+  })
+    .render()
+    .then(() => {
+      console.log(
+        'Finished rendering text content for page',
+        page.pageNumber,
+        Date.now() - time,
+        'ms'
+      )
+    })
 }
 
 watch(
