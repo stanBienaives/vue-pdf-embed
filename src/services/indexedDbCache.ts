@@ -29,6 +29,10 @@ export class IndexedDbCache implements TextLayerCacheInterface {
   private cachedCount = 0 // Track cache size in memory for sync access
   private initPromise: Promise<void> | null = null
 
+  // Performance optimization: defer non-critical operations
+  private deferredOperations = new Set<string>()
+  private processingDeferred = false
+
   constructor(options: IndexedDbCacheOptions = {}) {
     this.dbName = options.databaseName ?? 'vue-pdf-embed-cache'
     this.dbVersion = options.version ?? 1
@@ -41,7 +45,7 @@ export class IndexedDbCache implements TextLayerCacheInterface {
       await this.ensureInitialized()
       if (!this.db) return null
 
-      const key = await this.generateCacheKey(source, pageNumber)
+      const key = this.generateCacheKeySync(source, pageNumber)
       const transaction = this.db.transaction(['textLayerCache'], 'readonly')
       const store = transaction.objectStore('textLayerCache')
       const request = store.get(key)
@@ -50,16 +54,17 @@ export class IndexedDbCache implements TextLayerCacheInterface {
         request.onsuccess = () => {
           const entry = request.result as IndexedDbCacheEntry | undefined
           if (entry && entry.expiresAt > Date.now()) {
-            // Update access statistics
-            this.updateAccessStats(entry).catch(console.warn)
+            // Just update in-memory stats, no database write
             this.hitCount++
+            // Defer access stats update to avoid blocking reads
+            this.deferredUpdateAccessStats(entry.key)
             resolve(entry.content)
           } else {
-            // If entry was expired, remove it and decrement count
-            if (entry && entry.expiresAt <= Date.now()) {
-              this.removeExpiredEntry(entry.key).catch(console.warn)
-            }
+            // Just increment miss count, defer expired entry cleanup
             this.missCount++
+            if (entry && entry.expiresAt <= Date.now()) {
+              this.deferredRemoveExpiredEntry(entry.key)
+            }
             resolve(null)
           }
         }
@@ -84,7 +89,7 @@ export class IndexedDbCache implements TextLayerCacheInterface {
       await this.ensureInitialized()
       if (!this.db) return
 
-      const key = await this.generateCacheKey(source, pageNumber)
+      const key = this.generateCacheKeySync(source, pageNumber)
       const now = Date.now()
       const entry: IndexedDbCacheEntry = {
         key,
@@ -365,11 +370,26 @@ export class IndexedDbCache implements TextLayerCacheInterface {
       'numPages' in source &&
       typeof source.numPages === 'number'
     ) {
-      const fingerprint =
-        'fingerprints' in source && Array.isArray(source.fingerprints)
-          ? source.fingerprints[0] || 'unknown'
-          : 'unknown'
+      // Handle PDFDocumentProxy - check both fingerprints and fingerprint properties
+      let fingerprint = 'unknown'
+      if ('fingerprints' in source && Array.isArray(source.fingerprints)) {
+        fingerprint = source.fingerprints[0] || 'unknown'
+      } else if (
+        'fingerprint' in source &&
+        typeof source.fingerprint === 'string'
+      ) {
+        fingerprint = source.fingerprint
+      } else if (
+        '_pdfInfo' in source &&
+        source._pdfInfo &&
+        'fingerprints' in source._pdfInfo
+      ) {
+        fingerprint = source._pdfInfo.fingerprints?.[0] || 'unknown'
+      }
       sourceKey = `doc:${fingerprint}`
+      console.log(
+        `🔑 IndexedDB cache key (async): doc:${fingerprint} for page ${pageNumber}`
+      )
     } else {
       const serialized = JSON.stringify(source, null, 0)
       sourceKey = await this.hashString(serialized)
@@ -438,6 +458,180 @@ export class IndexedDbCache implements TextLayerCacheInterface {
       })
     } catch (error) {
       console.warn('Failed to remove expired entry:', error)
+    }
+  }
+
+  // PERFORMANCE OPTIMIZATIONS
+
+  private generateCacheKeySync(source: Source, pageNumber: number): string {
+    let sourceKey: string
+
+    if (source === null) {
+      sourceKey = 'null'
+    } else if (typeof source === 'string') {
+      sourceKey = source
+    } else if (source instanceof ArrayBuffer) {
+      // Use a simple hash instead of crypto.subtle for performance
+      sourceKey = this.fastHashArrayBuffer(source)
+    } else if (source instanceof Uint8Array) {
+      sourceKey = this.fastHashUint8Array(source)
+    } else if (
+      source &&
+      'numPages' in source &&
+      typeof source.numPages === 'number'
+    ) {
+      // Handle PDFDocumentProxy - check both fingerprints and fingerprint properties
+      let fingerprint = 'unknown'
+      if ('fingerprints' in source && Array.isArray(source.fingerprints)) {
+        fingerprint = source.fingerprints[0] || 'unknown'
+      } else if (
+        'fingerprint' in source &&
+        typeof source.fingerprint === 'string'
+      ) {
+        fingerprint = source.fingerprint
+      } else if (
+        '_pdfInfo' in source &&
+        source._pdfInfo &&
+        'fingerprints' in source._pdfInfo
+      ) {
+        fingerprint = source._pdfInfo.fingerprints?.[0] || 'unknown'
+      }
+      sourceKey = `doc:${fingerprint}`
+      console.log(
+        `🔑 IndexedDB cache key (sync): doc:${fingerprint} for page ${pageNumber}`
+      )
+    } else {
+      // Simple stringify for objects
+      sourceKey = this.fastHashString(JSON.stringify(source, null, 0))
+    }
+
+    return `${sourceKey}:${pageNumber}`
+  }
+
+  private fastHashString(str: string): string {
+    let hash = 0
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i)
+      hash = (hash << 5) - hash + char
+      hash = hash & hash // Convert to 32bit integer
+    }
+    return hash.toString(36)
+  }
+
+  private fastHashArrayBuffer(buffer: ArrayBuffer): string {
+    const view = new Uint32Array(buffer)
+    let hash = 0
+    const sampleSize = Math.min(view.length, 100) // Sample first 400 bytes
+
+    for (let i = 0; i < sampleSize; i++) {
+      hash = (hash << 5) - hash + view[i]
+      hash = hash & hash
+    }
+    return hash.toString(36) + '_' + buffer.byteLength
+  }
+
+  private fastHashUint8Array(array: Uint8Array): string {
+    let hash = 0
+    const sampleSize = Math.min(array.length, 400) // Sample first 400 bytes
+
+    for (let i = 0; i < sampleSize; i++) {
+      hash = (hash << 5) - hash + array[i]
+      hash = hash & hash
+    }
+    return hash.toString(36) + '_' + array.length
+  }
+
+  private deferredUpdateAccessStats(key: string): void {
+    // Add to deferred operations instead of immediate execution
+    this.deferredOperations.add(`access:${key}`)
+    this.scheduleDeferredProcessing()
+  }
+
+  private deferredRemoveExpiredEntry(key: string): void {
+    // Add to deferred operations instead of immediate execution
+    this.deferredOperations.add(`remove:${key}`)
+    this.scheduleDeferredProcessing()
+  }
+
+  private scheduleDeferredProcessing(): void {
+    if (this.processingDeferred) return
+
+    // Process deferred operations after a short delay
+    setTimeout(() => {
+      this.processDeferredOperations()
+    }, 100)
+  }
+
+  private async processDeferredOperations(): Promise<void> {
+    if (this.processingDeferred || this.deferredOperations.size === 0) return
+
+    this.processingDeferred = true
+    const operations = Array.from(this.deferredOperations)
+    this.deferredOperations.clear()
+
+    try {
+      if (!this.db) return
+
+      // Group operations by type
+      const accessOps = operations.filter((op) => op.startsWith('access:'))
+      const removeOps = operations.filter((op) => op.startsWith('remove:'))
+
+      // Process access stat updates in batches
+      if (accessOps.length > 0) {
+        await this.batchUpdateAccessStats(
+          accessOps.map((op) => op.substring(7))
+        )
+      }
+
+      // Process removals in batches
+      if (removeOps.length > 0) {
+        await this.batchRemoveEntries(removeOps.map((op) => op.substring(7)))
+      }
+    } catch (error) {
+      console.warn('Failed to process deferred operations:', error)
+    } finally {
+      this.processingDeferred = false
+    }
+  }
+
+  private async batchUpdateAccessStats(keys: string[]): Promise<void> {
+    if (!this.db) return
+
+    try {
+      const transaction = this.db.transaction(['textLayerCache'], 'readwrite')
+      const store = transaction.objectStore('textLayerCache')
+      const now = Date.now()
+
+      for (const key of keys) {
+        const getRequest = store.get(key)
+        getRequest.onsuccess = () => {
+          const entry = getRequest.result as IndexedDbCacheEntry | undefined
+          if (entry) {
+            entry.lastAccessed = now
+            entry.accessCount++
+            store.put(entry)
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Batch access stats update failed:', error)
+    }
+  }
+
+  private async batchRemoveEntries(keys: string[]): Promise<void> {
+    if (!this.db) return
+
+    try {
+      const transaction = this.db.transaction(['textLayerCache'], 'readwrite')
+      const store = transaction.objectStore('textLayerCache')
+
+      for (const key of keys) {
+        store.delete(key)
+      }
+
+      this.cachedCount = Math.max(0, this.cachedCount - keys.length)
+    } catch (error) {
+      console.warn('Batch remove failed:', error)
     }
   }
 }

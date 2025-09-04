@@ -68,6 +68,7 @@ export function emptyElement(el?: HTMLElement | null) {
   while (el?.firstChild) {
     el.removeChild(el.firstChild)
   }
+  // if (el) el.replaceChildren()
 }
 
 // @internal

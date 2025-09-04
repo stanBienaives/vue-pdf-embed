@@ -227,7 +227,9 @@ const preloadTextLayer = async (pages: number[]) => {
     pages.map(async (pageNum) => {
       try {
         // Check if already cached
-        const cached = await cache.value!.get(props.source, pageNum)
+        // Use doc.value for cache key (it has fingerprint)
+        const cacheKey = doc.value!
+        const cached = await cache.value!.get(cacheKey, pageNum)
         if (cached) {
           return
         }
@@ -235,7 +237,7 @@ const preloadTextLayer = async (pages: number[]) => {
         // Load and cache the page's text content
         const page = await doc.value!.getPage(pageNum)
         const textContent = await page.getTextContent()
-        await cache.value!.set(props.source, pageNum, textContent)
+        await cache.value!.set(cacheKey, pageNum, textContent)
       } catch (error) {
         console.warn(`Failed to preload text layer for page ${pageNum}:`, error)
       }
@@ -538,40 +540,101 @@ const renderPageTextLayer = async (
   viewport: PageViewport,
   container: HTMLElement
 ) => {
+  const totalStartTime = performance.now()
+  console.log(`🔄 TextLayer render started for page ${page.pageNumber}`)
+
+  // Step 1: Clear container
+  const emptyStartTime = performance.now()
   emptyElement(container)
+  const emptyTime = performance.now() - emptyStartTime
+  console.log(`  ⏱️  Container cleared: ${emptyTime.toFixed(2)}ms`)
 
   let textContent
+  let cacheHit = false
 
-  // Try to get from cache first if caching is enabled
+  // Step 2: Try to get from cache first
+  const cacheStartTime = performance.now()
   if (cache.value) {
-    textContent = await cache.value.get(props.source, page.pageNumber)
+    console.log(
+      `  🔍 Cache type: ${cacheManager.value?.getActualCacheType() || 'unknown'}`
+    )
+    // Use doc.value for cache key if available (it has fingerprint), otherwise use props.source
+    const cacheKey = doc.value || props.source
+    textContent = await cache.value.get(cacheKey, page.pageNumber)
+    cacheHit = !!textContent
+  }
+  const cacheTime = performance.now() - cacheStartTime
+
+  // Detailed cache timing analysis
+  if (cacheTime > 100) {
+    console.warn(
+      `  ⚠️  SLOW cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Consider switching cache strategy`
+    )
+  } else if (cacheTime > 10) {
+    console.log(
+      `  ⏱️  Cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms - Performance acceptable`
+    )
+  } else {
+    console.log(
+      `  ⚡ Fast cache lookup (${cacheHit ? 'HIT' : 'MISS'}): ${cacheTime.toFixed(2)}ms`
+    )
   }
 
-  // If not in cache, get from page and cache it
+  // Step 3: Get text content from PDF if not cached
+  let extractTime = 0
+  let cacheStoreTime = 0
   if (!textContent) {
+    const extractStartTime = performance.now()
     textContent = await page.getTextContent()
+    extractTime = performance.now() - extractStartTime
+    console.log(`  ⏱️  Text extraction from PDF: ${extractTime.toFixed(2)}ms`)
 
+    // Step 4: Store in cache
     if (cache.value) {
-      await cache.value.set(props.source, page.pageNumber, textContent)
+      const cacheStoreStartTime = performance.now()
+      // Use doc.value for cache key if available (it has fingerprint), otherwise use props.source
+      const cacheKey = doc.value || props.source
+      await cache.value.set(cacheKey, page.pageNumber, textContent)
+      cacheStoreTime = performance.now() - cacheStoreStartTime
+      console.log(`  ⏱️  Cache storage: ${cacheStoreTime.toFixed(2)}ms`)
     }
   }
 
-  console.log('Start Rendering text content for page', page.pageNumber)
-  const time = Date.now()
-  new TextLayer({
+  // Step 5: Analyze text content complexity
+  const itemCount = textContent.items.length
+  const textLength = textContent.items.reduce((sum, item) => {
+    return (
+      sum + (typeof item === 'object' && 'str' in item ? item.str.length : 0)
+    )
+  }, 0)
+  console.log(
+    `  📊 Text complexity: ${itemCount} items, ${textLength} characters`
+  )
+
+  // Step 6: Create and render TextLayer
+  const renderStartTime = performance.now()
+  const textLayer = new TextLayer({
     container,
     textContentSource: textContent,
     viewport,
   })
-    .render()
-    .then(() => {
-      console.log(
-        'Finished rendering text content for page',
-        page.pageNumber,
-        Date.now() - time,
-        'ms'
-      )
-    })
+
+  await textLayer.render()
+  const renderTime = performance.now() - renderStartTime
+  console.log(`  ⏱️  TextLayer.render(): ${renderTime.toFixed(2)}ms`)
+
+  // Final timing summary
+  const totalTime = performance.now() - totalStartTime
+
+  console.log(
+    `✅ TextLayer page ${page.pageNumber} completed in ${totalTime.toFixed(2)}ms`
+  )
+  console.log(
+    `   📈 Breakdown: Empty=${emptyTime.toFixed(1)}ms, Cache=${cacheTime.toFixed(1)}ms, Extract=${extractTime.toFixed(1)}ms, Store=${cacheStoreTime.toFixed(1)}ms, Render=${renderTime.toFixed(1)}ms`
+  )
+  console.log(
+    `   🎯 Cache: ${cacheHit ? '✅ HIT' : '❌ MISS'}, Items: ${itemCount}, Chars: ${textLength}`
+  )
 }
 
 watch(
