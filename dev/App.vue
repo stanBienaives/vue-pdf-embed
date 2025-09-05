@@ -700,6 +700,7 @@ onMounted(() => {
       <VuePdfEmbed
         :source="pdfSource"
         :headless="true"
+        :text-layer="true"
         :preload-text-layer-pages="[10, 11, 12, 13, 14]"
         :enable-text-layer-cache="true"
         :cache-strategy="cacheStrategy"

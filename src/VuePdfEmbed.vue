@@ -418,6 +418,11 @@ const render = async () => {
       if (props.preloadTextLayerPages && cache.value) {
         await preloadTextLayer(props.preloadTextLayerPages)
       }
+
+      if (!props.preloadTextLayerPages && cache.value) {
+        await preloadAllTextLayers()
+      }
+
       // Update pageScales for consistency
       pageScales.value = newPageScales
       emit('rendered')
