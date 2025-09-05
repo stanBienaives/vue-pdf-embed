@@ -695,6 +695,20 @@ onMounted(() => {
         @rendered="onRendered"
         @text-layer-progress="onTextLayerProgress"
       />
+
+      <!-- Test headless mode for preloading -->
+      <VuePdfEmbed
+        :source="pdfSource"
+        :headless="true"
+        :preload-text-layer-pages="[10, 11, 12, 13, 14]"
+        :enable-text-layer-cache="true"
+        :cache-strategy="cacheStrategy"
+        :cache-indexed-db-name="indexedDbName"
+        @loaded="() => console.log('Headless component loaded')"
+        @text-layer-progress="
+          (params) => console.log('Headless preload progress:', params)
+        "
+      />
     </div>
 
     <!-- Performance Info -->

@@ -102,6 +102,10 @@ const props = withDefaults(
      * Whether to enable debug logging for performance metrics.
      */
     debug?: boolean
+    /**
+     * Whether to run in headless mode (no visual rendering, preload only).
+     */
+    headless?: boolean
   }>(),
   {
     cacheStrategy: 'memory',
@@ -111,6 +115,7 @@ const props = withDefaults(
     rotation: 0,
     scale: 1,
     debug: false,
+    headless: false,
   }
 )
 
@@ -407,6 +412,17 @@ const render = async () => {
 
     // Reset completed pages tracking for new render cycle
     textLayerCompletedPages.clear()
+
+    // In headless mode, only preload text layers if specified, no visual rendering
+    if (props.headless) {
+      if (props.preloadTextLayerPages && cache.value) {
+        await preloadTextLayer(props.preloadTextLayerPages)
+      }
+      // Update pageScales for consistency
+      pageScales.value = newPageScales
+      emit('rendered')
+      return
+    }
 
     await Promise.all(
       pageNums.value.map(async (pageNum, i) => {
@@ -798,7 +814,7 @@ defineExpose({
 </script>
 
 <template>
-  <div :id="id" ref="root" class="vue-pdf-embed">
+  <div v-if="!headless" :id="id" ref="root" class="vue-pdf-embed">
     <div v-for="(pageNum, i) in pageNums" :key="pageNum">
       <slot name="before-page" :page="pageNum" />
 
@@ -820,4 +836,11 @@ defineExpose({
       <slot name="after-page" :page="pageNum" />
     </div>
   </div>
+  <!-- Headless mode: minimal DOM for component functionality -->
+  <div
+    v-else
+    ref="root"
+    style="display: none"
+    class="vue-pdf-embed vue-pdf-embed--headless"
+  ></div>
 </template>
