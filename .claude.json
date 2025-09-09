@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "browser-mcp": {
+      "command": "npx",
+      "args": ["-y", "@browser-mcp/mcp-server"],
+      "env": {
+        "BROWSER_MCP_PORT": "3000"
+      }
+    }
+  }
+}

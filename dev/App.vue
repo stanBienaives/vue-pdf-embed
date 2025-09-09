@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import VuePdfEmbed, {
   preloadTextLayerCache,
   preloadTextLayerCacheAll,
@@ -15,13 +15,14 @@ const cacheStats = ref<CacheStats | null>(null)
 const isLoading = ref(false)
 const preloadPages = ref([1, 2, 3])
 const renderTime = ref<number | null>(null)
+const componentKey = ref(0)
 const standalonePreloadProgress = ref(0)
 const lastPreloadResult = ref<PreloadResult | null>(null)
 const isDragOver = ref(false)
 const isFileLoading = ref(false)
 const uploadedFileName = ref('')
 const showTextLayer = ref(false)
-const cacheStrategy = ref<CacheStrategy>('memory')
+const cacheStrategy = ref<CacheStrategy>('indexeddb')
 const indexedDbName = ref('vue-pdf-embed-demo')
 const cacheExpirationDays = ref(7)
 const storageInfo = ref<{
@@ -50,6 +51,7 @@ const isRenderingTextLayers = ref(false)
 const defaultPdfUrl =
   'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf'
 const pdfSource = ref<string | ArrayBuffer>(defaultPdfUrl)
+const uploadedFile = ref<File | null>(null)
 
 const pages = computed(() => {
   return pdfRef.value?.doc?.numPages || 0
@@ -69,11 +71,14 @@ const updateCacheStats = async () => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const onDocumentLoaded = async () => {
-  console.log('PDF loaded with', pdfRef.value.doc.numPages, 'pages')
+  console.log('PDF loaded with', pdfRef.value?.doc?.numPages, 'pages')
+  await nextTick()
   updateCacheStats()
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const onRendered = () => {
   console.log('Rendered')
   updateCacheStats()
@@ -90,6 +95,7 @@ const onRendered = () => {
 let latestProgressParams: TextLayerProgressParams | null = null
 let updateScheduled = false
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const onTextLayerProgress = (params: TextLayerProgressParams) => {
   latestProgressParams = params
 
@@ -211,6 +217,7 @@ const handleFileUpload = async (file: File) => {
     const arrayBuffer = await file.arrayBuffer()
     pdfSource.value = arrayBuffer
     uploadedFileName.value = file.name
+    uploadedFile.value = file // Store the original file for refresh functionality
     currentPage.value = 1
 
     // // Clear cache when switching documents
@@ -261,6 +268,7 @@ const handleDrop = (event: DragEvent) => {
 const resetToDefault = () => {
   pdfSource.value = defaultPdfUrl
   uploadedFileName.value = ''
+  uploadedFile.value = null
   currentPage.value = 1
 
   // Clear cache when switching back to default
@@ -270,6 +278,45 @@ const resetToDefault = () => {
   }
 
   console.log('Reset to default PDF document')
+}
+
+const refreshComponent = async () => {
+  console.log('Refreshing component...')
+
+  // Reset progress state first
+  textLayerProgress.value = {
+    currentPage: 0,
+    totalPages: 0,
+    percentage: 0,
+    renderTime: 0,
+    cacheHit: false,
+    pageNumber: 0,
+  }
+  isRenderingTextLayers.value = false
+  renderTime.value = null
+
+  // Force component recreation using key change
+  componentKey.value++
+  await nextTick()
+
+  // If we have an uploaded file, re-read it to get a fresh ArrayBuffer
+  if (uploadedFile.value) {
+    try {
+      const newArrayBuffer = await uploadedFile.value.arrayBuffer()
+      pdfSource.value = newArrayBuffer
+      console.log('Re-loaded uploaded PDF for refresh')
+    } catch (error) {
+      console.error('Failed to re-read uploaded file:', error)
+    }
+  } else {
+    // For URL sources, force re-evaluation
+    const currentSource = pdfSource.value
+    pdfSource.value = ''
+    await nextTick()
+    pdfSource.value = currentSource
+  }
+
+  console.log('Component refreshed successfully')
 }
 
 const standalonePreloadSelected = async () => {
@@ -644,6 +691,13 @@ onMounted(() => {
         >
           {{ showTextLayer ? '👁️ Hide TextLayer' : '👁️‍🗨️ Show TextLayer' }}
         </button>
+        <button
+          class="refresh-button"
+          title="Refresh VuePdfEmbed component (force reload)"
+          @click="refreshComponent"
+        >
+          🔄 Refresh
+        </button>
         <span class="viewer-info">
           {{
             showTextLayer
@@ -654,34 +708,66 @@ onMounted(() => {
       </div>
 
       <!-- Text Layer Rendering Progress Bar -->
-      <div v-if="isRenderingTextLayers" class="text-layer-progress">
+      <div
+        class="text-layer-progress"
+        :class="{ idle: !isRenderingTextLayers }"
+      >
         <div class="progress-header">
-          <span>📄 Rendering Text Layers</span>
+          <span>{{
+            isRenderingTextLayers
+              ? '📄 Rendering Text Layers'
+              : '📄 Text Layer Status'
+          }}</span>
           <span class="progress-details">
-            {{ textLayerProgress.currentPage }} of
-            {{ textLayerProgress.totalPages }} pages completed
-            <span v-if="textLayerProgress.pageNumber"
-              >(Page #{{ textLayerProgress.pageNumber }}
-              {{
-                textLayerProgress.cacheHit ? 'from cache' : 'rendered'
-              }})</span
-            >
+            <span v-if="isRenderingTextLayers">
+              {{ textLayerProgress.currentPage }} of
+              {{ textLayerProgress.totalPages }} pages completed
+              <span v-if="textLayerProgress.pageNumber"
+                >(Page #{{ textLayerProgress.pageNumber }}
+                {{
+                  textLayerProgress.cacheHit ? 'from cache' : 'rendered'
+                }})</span
+              >
+            </span>
+            <span v-else-if="cacheStats">
+              Hit Rate: {{ (cacheStats.hitRate * 100).toFixed(1) }}% | Cached:
+              {{ cacheStats.size }}/{{ cacheStats.maxSize }} pages
+            </span>
+            <span v-else> Ready to render text layers </span>
           </span>
         </div>
         <div class="progress-bar">
           <div
             class="progress-fill"
             :class="{ cached: textLayerProgress.cacheHit }"
-            :style="{ width: `${textLayerProgress.percentage}%` }"
+            :style="{
+              width: `${isRenderingTextLayers ? textLayerProgress.percentage : 0}%`,
+            }"
           ></div>
         </div>
         <div class="progress-footer">
-          <span>{{ textLayerProgress.percentage.toFixed(0) }}% Complete</span>
-          <span>Last: {{ textLayerProgress.renderTime.toFixed(0) }}ms</span>
+          <span v-if="isRenderingTextLayers"
+            >{{ textLayerProgress.percentage.toFixed(0) }}% Complete</span
+          >
+          <span v-else-if="cacheStats"
+            >Hits: {{ cacheStats.hitCount }} | Misses:
+            {{ cacheStats.missCount }}</span
+          >
+          <span v-else>Idle</span>
+          <span v-if="isRenderingTextLayers"
+            >Last: {{ textLayerProgress.renderTime.toFixed(0) }}ms</span
+          >
+          <span v-else-if="textLayerProgress.renderTime > 0"
+            >Last render: {{ textLayerProgress.renderTime.toFixed(0) }}ms</span
+          >
+          <span v-else-if="cacheStats && storageInfo"
+            >{{ storageInfo.actualType.toUpperCase() }} cache</span
+          >
         </div>
       </div>
 
       <VuePdfEmbed
+        :key="componentKey"
         ref="pdfRef"
         :source="pdfSource"
         :page="displayAllPages ? undefined : currentPage"
@@ -697,7 +783,8 @@ onMounted(() => {
       />
 
       <!-- Test headless mode for preloading -->
-      <VuePdfEmbed
+      <!-- <VuePdfEmbed
+        :key="pdfSource?.toString()?.slice(0, 20) || 'headless'"
         :source="pdfSource"
         :headless="true"
         :text-layer="true"
@@ -709,7 +796,7 @@ onMounted(() => {
         @text-layer-progress="
           (params) => console.log('Headless preload progress:', params)
         "
-      />
+      /> -->
     </div>
 
     <!-- Performance Info -->
@@ -937,7 +1024,8 @@ body {
     border-radius: 6px;
     border-left: 4px solid #6f42c1;
 
-    .text-layer-toggle {
+    .text-layer-toggle,
+    .refresh-button {
       padding: 0.5rem 1rem;
       background: #6f42c1;
       color: white;
@@ -960,6 +1048,14 @@ body {
         &:hover {
           background: #e8690b;
         }
+      }
+    }
+
+    .refresh-button {
+      background: #28a745;
+
+      &:hover {
+        background: #218838;
       }
     }
 
@@ -1100,6 +1196,11 @@ body {
   margin-bottom: 1rem;
   color: white;
   animation: slideDown 0.3s ease-out;
+
+  &.idle {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+    opacity: 0.7;
+  }
 
   .progress-header {
     display: flex;
